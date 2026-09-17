@@ -69,33 +69,41 @@ export interface CreateTaskInput {
 }
 
 export function createTask(input: CreateTaskInput): Task {
-  const now = new Date().toISOString();
-  const { max } = selectMaxPosition.get('todo') as unknown as { max: number };
-  const task = {
-    id: randomUUID(),
-    title: input.title,
-    description: input.description ?? null,
-    status: 'todo' as Status,
-    position: max + 1,
-    createdAt: now,
-    updatedAt: now,
-  };
-  insertTask.run(
-    task.id,
-    task.title,
-    task.description,
-    task.status,
-    task.position,
-    task.createdAt,
-    task.updatedAt
-  );
-  return task;
+  // MAX(position) read + insert run in one transaction so two concurrent
+  // creates can't compute the same position.
+  return inTransaction(() => {
+    const now = new Date().toISOString();
+    const { max } = selectMaxPosition.get('todo') as unknown as { max: number };
+    const task = {
+      id: randomUUID(),
+      title: input.title,
+      description: input.description ?? null,
+      status: 'todo' as Status,
+      position: max + 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    insertTask.run(
+      task.id,
+      task.title,
+      task.description,
+      task.status,
+      task.position,
+      task.createdAt,
+      task.updatedAt
+    );
+    return task;
+  });
 }
 
 export interface UpdateTaskInput {
   title?: string;
   description?: string;
 }
+
+const updateTaskStmt = db.prepare(
+  'UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE id = ?'
+);
 
 export function updateTask(id: string, input: UpdateTaskInput): Task | undefined {
   const existing = getTask(id);
@@ -104,12 +112,7 @@ export function updateTask(id: string, input: UpdateTaskInput): Task | undefined
   const description =
     input.description !== undefined ? input.description : (existing.description ?? null);
   const now = new Date().toISOString();
-  db.prepare('UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE id = ?').run(
-    title,
-    description,
-    now,
-    id
-  );
+  updateTaskStmt.run(title, description, now, id);
   return getTask(id);
 }
 
